@@ -1,0 +1,139 @@
+my-machine: EC2 instance: Publisher
+
+Layer 1: 
+
+orders: Kinesis Data Stream
+
+orders-firehose: Kinesis Delivery Stream
+
+fo-to-dw-orders-landing-area/orders: S3 landing area - partition based on processing time and convert to parquet / snappy - done by lambda transformation and format conversion in firehose.
+We use the lambda function - LambdaTransfomerFnNew - on the Firehose, to get the processing timestamp and a run_id for every run of the workflow.
+
+
+Enable Amazon EventBridge Event Notification in the Properties of the Bucket.
+
+-------------------------------------------------------------------------------
+
+Layer 2: Option 1: A file is sent by the source system at the end of every batch into the batch-completion folder of landing area bucket.
+The Glue workflow starts after the arrival of this file, to ensure no data is lost.
+
+EventBridge Rule: orders-eventbridge-rule:
+
+In the Event Pattern UI, i chose AWS Service as S3, Event Type as Amazon S3 Event Notification, Event Type Specification 1 as Specific Events -> Object Created, Event Type Specification 2 as Specific Bucket -> fo-to-dw-orders-landing-area.
+
+Source:
+
+{
+  "source": ["aws.s3"],
+  "detail-type": ["Object Created"],
+  "detail": {
+    "bucket": {
+      "name": ["fo-to-dw-orders-landing-area"]
+    },
+    "object": {
+      "key": [{
+        "prefix": "batch-completion/"
+      }]
+    }
+  }
+}
+
+Layer 2: Option 2: This is a continuous loop. Once the last job in the workflow completes, the workflow gets triggered again.
+We also have another (OR) condition, the same as the above one, looking for a file in the batch-completion folder. This is useful for the first run.
+Also, suppose, for some unknown reason (like network issues), one of the crawlers or one of the jobs in the workflow fail and the last glue job in the workflow does not get triggered at all. So, the workflow will not get triggered at all, but once a file arrives in the batch-completion folder, the workflow will get triggered again.
+
+You must understand that a continuous loop is not a good solution unless you are expecting records throughtout the day and there are strict SLA's to be met.
+This is because, the resources are being continuosly used whether there is data to be processed or not.
+In a production scenario, if you go with this option, you must have an adhoc or a scheduled job that disables / enables the rule based on the requirements.
+
+
+orders-infinite-loop-rule:
+
+{
+  "$or": [{
+    "detail-type": ["Glue Job State Change"],
+    "source": ["aws.glue"],
+    "detail": {
+      "jobName": ["orders_staging_audit_load"],
+      "state": ["SUCCEEDED"]
+    }
+  }, {
+    "source": ["aws.s3"],
+    "detail-type": ["Object Created"],
+    "detail": {
+      "bucket": {
+        "name": ["fo-to-dw-orders-landing-area"]
+      },
+      "object": {
+        "key": [{
+          "prefix": "batch-completion/"
+        }]
+      }
+    }
+  }]
+}
+
+Target: 
+
+Glue Workflow -> orders-workflow 
+
+The workflow will get triggered by the EventBridge Rule whenever a file is uploaded at: fo-to-dw-orders-landing-area/batch-completion/
+The "completion" file is designed to be uploaded by source system once it has completed sending all records.
+
+-------------------------------------------------------------------------------
+
+Layer 3: 
+
+orders-landing-area-crawler: Crawler - S3 Landing area - verify in Athena
+orders_landing_audit_load: Glue Python Shell job - dynamodb audit table (orders-audit-table) load for s3 landing area - verify 
+
+orders_landing_to_staging: Glue Spark ETL job with Job bookmark enabled - S3 Landing to S3 Staging (fo-to-dw-orders-staging-area/orders): explode, maintain partition/format/compression 
+orders-staging-area-crawler: Crawler - S3 Staging area - verify in Athena
+orders_staging_audit_load: Glue Python Shell job - dynamodb audit table (orders-audit-table) load for s3 staging area **** Compare counts, raise notifications ****
+
+orders_s3_staging_to_redshift_staging: Glue Spark ETL job with Job bookmark enabled - S3 Staging area to Redshift staging area
+orders_redshift_staging_audit_load: Glue Python Shell job - dynamodb audit table (orders-audit-table) load for redshift staging area, Compare counts, raise notifications
+
+orders_redshift_staging_to_redshift_final: Glue Python Shell job to enrich and move data from Redshift staging area to Redshift final area
+orders_redshift_final_audit_load: Glue Python Shell job - dynamodb audit table (orders-audit-table) load for redshift final area, Compare counts, raise notifications
+
+-------------------------------------------------------------------------------
+
+The Audit Table Scanner: AuditTableScannerFn
+
+In the DynamoDB audit table - orders-audit-table - where we log the number of records loaded in each of the 4 layers - S3 landing area, S3 staging area, Redshift Staaging area and Redshift final area - we have turned ON the DynamoDB Streams option with the trigger as the Lambda function -> AuditTableScannerFn.
+
+Everytime a reecord is loaded in this table, for S3 staging, Redshift staging and Redshift final areas, a comparison is done with the record count of S3 landing area for the same run_id. If counts match a SUCCESS message is sent through an SNS email notification and if counts do not match, a FAILURE message is sent through the SNS email notification.
+
+We could have different email-ids / SNS topics for SUCCESS / failure notifications if needed.
+
+-------------------------------------------------------------------------------
+
+Notes:
+
+1. In the landing layer, we store "products" as an array.
+"products" can have 'n' number of products. Use the 'element_at' keyword to access a particular product. 
+Then, use the 'dot' notation to access a particular attribute of the particular product.
+
+This is how you will query the data in Athena:
+
+SELECT element_at(products, 1).PRODUCT_CODE AS PRODUCT_CODE FROM "ecommerce-database"."orders" 
+where order_id = 'bee482f1-833c-4395-9d85-0ca6b963d6e7'
+
+
+2. Since both S3 landing area and S3 staging area have the same folder name "orders", in the staging crawler, i have provided the table prefix as staging_.
+So, in Glue Data Catalog, "orders" table will refer to landing area and "staging_orders" will refer to staging area.
+
+
+3. In the Infinite loop option, orders_landing_to_staging glue job was failing when there was no data to be processed.
+Hence added the condition, if S3bucket_node1.toDF().count() > 0: in this job.
+
+
+4. In the orders_landing_audit_load job, we have used the query:
+select run_id, sum(cardinality("products")) as num_records from "ecommerce-database"."orders" group by run_id;
+instead of 
+select run_id, count(*) as num_records from "ecommerce-database"."orders" group by run_id;
+
+This is because, each order can have multiple products.
+When loading into staging layer, we will be exploding the data and this exploded count is what will be loaded into the DynamoDB audit table.
+So, even when loading the audit table from landing layer, we need the exploded count - so that we can match the landing and staging layer counts in teh audit table.

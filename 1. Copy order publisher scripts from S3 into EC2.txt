@@ -1,0 +1,20 @@
+Created 3 S3 buckets:
+
+fo-to-dw-code-repo-bucket
+fo-to-dw-orders-landing-area
+fo-to-dw-orders-staging-area
+
+Uploaded code snippets into fo-to-dw-code-repo-bucket
+
+Provisioned an EC2 instance and copied publisher code from S3 into EC2
+
+aws s3 cp s3://fo-to-dw-code-repo-bucket/order_generator.py .
+aws s3 cp s3://fo-to-dw-code-repo-bucket/order_publisher_batch.py .
+aws s3 cp s3://fo-to-dw-code-repo-bucket/order_generator_error_1.py .
+aws s3 cp s3://fo-to-dw-code-repo-bucket/order_generator_error_2.py .
+aws s3 cp s3://fo-to-dw-code-repo-bucket/order_publisher_batch_error_1.py .
+aws s3 cp s3://fo-to-dw-code-repo-bucket/order_publisher_batch_error_2.py .
+
+Run the command:
+aws configure
+and provide required details.

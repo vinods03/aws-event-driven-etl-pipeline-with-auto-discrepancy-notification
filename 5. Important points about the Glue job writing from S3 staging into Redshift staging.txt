@@ -1,0 +1,19 @@
+Create a Glue Connection of Connection Type "Amazon Redshift"
+Provide the redshift cluster name, database name, username, password details in the Connection.
+This Connection needs to be used in the Glue job that writes data from S3 staging (Glue Data Catalog) to the Redshift Staging layer.
+
+Create an S3 VPC endpoint in the VPC/subnets where the Redshift cluster is created.
+The Glue job that reads from S3 (Glue Data Catalog actually) needs to be able to write into a Redshift cluster that resides within a VPC.
+i.e. From outside VPC to inside VPC.
+In such cases an Endpoint needs to be created for the component outside teh VPC.
+
+When i had to reprocess data from S3 staging into Redshift staging, i was able to Reset the job bookmark and rerun the job.
+
+I had to have run_id as INT, order_purchase_timestamp and processing_timestamp as TIMESTAMP in redshift staging as well, as in the Glue Data Catalog.
+Else, these columns were populated as NULL.
+Having VARCHAR(100) for all columns sounds like a great idea but it is not.
+
+The partition columns - year, month, day, hour - are not needed in the Redshift layer.
+Hence these columns were dropped in the "ApplyMapping" section of the Glue job processing data from S3 staging into Redshift staging.
+
+I have set Job Timeout as 5 minutes, the number of retries as 0, number of worker nodes as 2 and a Role that haas s3 read access and Redshift write access in the Glue job.

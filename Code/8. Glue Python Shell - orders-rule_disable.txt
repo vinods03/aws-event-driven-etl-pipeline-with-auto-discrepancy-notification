@@ -1,0 +1,19 @@
+import sys
+import boto3
+
+client = boto3.client('events')
+
+try:
+    
+    response = client.disable_rule(
+    Name = 'orders-infinite-loop-rule',
+    EventBusName = 'default'
+)
+
+    print('The disable response is ', response)
+
+except Exception as e:
+    
+    print('Disable rule failed')
+    
+    

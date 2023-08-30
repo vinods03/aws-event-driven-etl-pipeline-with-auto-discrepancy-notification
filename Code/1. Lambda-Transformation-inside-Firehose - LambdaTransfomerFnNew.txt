@@ -1,0 +1,50 @@
+import json
+import boto3
+import base64
+import time
+
+transformed_data = []
+# num_records = 0
+
+dynamodb = boto3.resource('dynamodb')
+audit_table = dynamodb.Table('orders-audit-table')
+
+def lambda_handler(event, context):
+    
+    print('The event is ', event)
+    for record in event['records']:
+        # print('The record is ', record)
+        
+        record_data = json.loads(base64.b64decode(record['data']).decode('utf-8'))
+        print('The record_data is ', record_data)
+        
+        order_id = record_data['order_id']
+        customer_id = record_data['customer_id']
+        seller_id = record_data['seller_id']
+        products = record_data['products']
+        order_purchase_timestamp = record_data['order_purchase_timestamp']
+        processing_timestamp = time.time()
+        run_id = int(processing_timestamp - (processing_timestamp % 60))
+        
+        transformed_item = {
+            'run_id': run_id,
+            'order_id': order_id,
+            'customer_id': customer_id,
+            'seller_id': seller_id,
+            'products': products,
+            'order_purchase_timestamp': order_purchase_timestamp,
+            'processing_timestamp': processing_timestamp
+        }
+        
+        output_record = {
+            'recordId': record['recordId'],
+            'result': 'Ok',
+            'data': base64.b64encode(json.dumps(transformed_item).encode('utf-8'))
+        }
+        
+        transformed_data.append(output_record)
+        
+       
+    return {
+        'records': transformed_data
+    }

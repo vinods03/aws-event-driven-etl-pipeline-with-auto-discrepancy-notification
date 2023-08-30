@@ -1,0 +1,59 @@
+import sys
+import time
+import boto3
+import json
+
+redshift_client = boto3.client('redshift-data')
+session = boto3.session.Session()
+secretsmanager_client = session.client(service_name = 'secretsmanager', region_name = 'us-east-1')
+
+dynamodb = boto3.resource('dynamodb')
+audit_table = dynamodb.Table('orders-audit-table')
+
+secret_name = 'ecommerce_redshift_secret'
+get_secret_value_response = secretsmanager_client.get_secret_value(SecretId = secret_name)
+secret_arn = get_secret_value_response['ARN']
+secret = get_secret_value_response['SecretString']
+secret_json = json.loads(secret)
+cluster_id = secret_json['dbClusterIdentifier']
+
+print('The cluster_id is ', cluster_id)
+print('The secret_arn is ', secret_arn)
+
+redshift_staging_audit_load_stmt = "select run_id, count(*) from ecommerce_staging.orders group by run_id;"
+print('The redshift_staging_audit_load_stmt is ', redshift_staging_audit_load_stmt)
+
+redshift_staging_audit_load_response = redshift_client.execute_statement(ClusterIdentifier = cluster_id, Database = 'dev', SecretArn = secret_arn, Sql = redshift_staging_audit_load_stmt)
+print('The redshift_staging_audit_load_response is ', redshift_staging_audit_load_response)
+        
+redshift_staging_audit_load_sql_id = redshift_staging_audit_load_response['Id']
+print('The redshift_staging_audit_load_sql_id is ', redshift_staging_audit_load_sql_id)
+        
+print('The status of the redshift staging audit load is ', redshift_client.describe_statement(Id = redshift_staging_audit_load_sql_id)['Status'])
+        
+while not(redshift_client.describe_statement(Id = redshift_staging_audit_load_sql_id)['Status']) == 'FINISHED':
+    time.sleep(10)
+            
+print('The status of the redshift staging audit load is ', redshift_client.describe_statement(Id = redshift_staging_audit_load_sql_id)['Status'])
+    
+redshift_staging_query_result = redshift_client.get_statement_result(Id = redshift_staging_audit_load_sql_id)
+print('redshift_staging_query_result is: ', redshift_staging_query_result)
+    
+# for i in range(0,len(redshift_staging_query_result['Records'])) :
+#     print(redshift_staging_query_result['Records'][i])
+#     print(redshift_staging_query_result['Records'][i][0]['longValue'])
+#     print(redshift_staging_query_result['Records'][i][1]['longValue'])
+        
+for i in range(0,len(redshift_staging_query_result['Records'])):
+    run_id = redshift_staging_query_result['Records'][i][0]['longValue']
+    print('The run id correspondingly being processed is ', run_id)
+    num_records_for_run_id = redshift_staging_query_result['Records'][i][1]['longValue']
+    print('The number of records processed for the run id ', run_id, ' is: ', num_records_for_run_id)
+    audit_table_load_response = audit_table.put_item(
+    Item = {
+            'run_id': int(run_id),
+            'layer': 'redshift_staging_layer',
+            'num_records': int(num_records_for_run_id)
+        }
+    )
+    print('audit_table_load_response is: ', audit_table_load_response)

@@ -1,0 +1,73 @@
+import sys
+import time
+import boto3
+
+client = boto3.client('athena')
+dynamodb = boto3.resource('dynamodb')
+audit_table = dynamodb.Table('orders-audit-table')
+
+# Initially, we had thought that we will capture the run_id loaded in S3 and process that but the chance of missing records is too high with this approach
+# Hence, commenting out the parameter based code
+# from awsglue.utils import getResolvedOptions
+# args = getResolvedOptions(sys.argv, ['run_id'])
+# run_id = args['run_id']
+# print('The run_id is ', run_id)
+
+# qs = 'select count(*) as num_records from "ecommerce-database"."orders" where run_id = ' + run_id
+# print('qs is: ', qs)
+
+# response = client.start_query_execution(
+#     QueryString = 'select count(*) as num_records from "ecommerce-database"."orders" where run_id = ' + run_id,
+#     QueryExecutionContext = {'Database': 'ecommerce-database'},
+#     ResultConfiguration = {'OutputLocation': 's3://fo-to-dw-orders-landing-area/aws-athena-query-results/'},
+#     WorkGroup='primary'
+# )
+
+# Process only the new run id's and not the ones already processed into staging_orders
+# even if we do not have the condition, dynamodb will not allow same PK to be loaded again but we are filtering out as a best practice
+# response = client.start_query_execution(
+# QueryString = 'select run_id, count(*) as num_records from "ecommerce-database"."orders" where run_id not in (select distinct run_id FROM "ecommerce-database"."staging_orders" ) group by run_id;',
+#     QueryExecutionContext = {'Database': 'ecommerce-database'},
+#     ResultConfiguration = {'OutputLocation': 's3://fo-to-dw-code-repo-bucket/aws-athena-query-results/'},
+#     WorkGroup='primary'
+# )
+
+response = client.start_query_execution(
+QueryString = 'select run_id, count(*) as num_records from "ecommerce-database"."staging_orders" group by run_id;',
+    QueryExecutionContext = {'Database': 'ecommerce-database'},
+    ResultConfiguration = {'OutputLocation': 's3://fo-to-dw-code-repo-bucket/aws-athena-query-results/'},
+    WorkGroup='primary'
+)
+
+query_execution_id = response['QueryExecutionId']
+print('The query execution id is: ', query_execution_id)
+
+response = client.get_query_execution(QueryExecutionId = query_execution_id)
+print('The get_query_execution response at the beginning is ', response['QueryExecution']['Status']['State'])
+
+while (client.get_query_execution(QueryExecutionId = query_execution_id)['QueryExecution']['Status']['State']) != 'SUCCEEDED':
+    time.sleep(5)
+
+response = client.get_query_execution(QueryExecutionId = query_execution_id)
+print('The get_query_execution response at the end is ', response['QueryExecution']['Status']['State'])
+
+response = client.get_query_results(
+    QueryExecutionId = query_execution_id,
+    MaxResults = 1000
+)
+
+print('The get_query_results response is ', response)
+
+for i in range(1, len(response['ResultSet']['Rows'])):
+    run_id = response['ResultSet']['Rows'][i]['Data'][0]['VarCharValue']
+    print('The run id correspondingly being processed is ', run_id)
+    num_records_for_run_id =  response['ResultSet']['Rows'][i]['Data'][1]['VarCharValue']
+    print('The number of records processed for the run id ', run_id, ' is: ', num_records_for_run_id)
+    audit_table_load_response = audit_table.put_item(
+        Item = {
+            'run_id': int(run_id),
+            'layer': 'staging_layer',
+            'num_records': int(num_records_for_run_id)
+        }
+    )
+    print('audit_table_load_response is: ', audit_table_load_response)

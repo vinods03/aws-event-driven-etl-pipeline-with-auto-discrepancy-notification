@@ -1,0 +1,20 @@
+We have 3 workflows:
+
+1. The main "orders-workflow" has all the landing / staging area crawlers, audit table loads and the landing to staging transformation job.
+The trigger type for this workflow is an EventBridge Event -> orders-infinite-loop-rule
+You can configure the "Number of Events" after which the trigger will start or the "Time delay" after which the trigger will start.
+i.e. you can start the workflow after you receive 100 files or after a delay of 300 seconds after the first file arrival -> whichever is earlier.
+This could be useful if we want to trigger based on the data files but we will be triggering based on a "batch completion file". 
+So we will leave the Number of events and Time delay with default values.
+
+If you do not wwant to run your workflow continuously but only based on the arrival of a batch-completion-file, use the EventBridge Event -> orders-eventbridge-rule.
+
+
+2. The "orders-enable-infinite-loop-rule-workflow" has a SCHEDULE based trigger that start at 9:15 AM on all weekdays (Mon - Fri).
+The only job in this workflow is the Glue Python Shell job - orders_rule_enable.
+
+3. The "orders-disable-infinite-loop-rule-workflow" has a SCHEDULE based trigger that start at 9:00 AM on all weekdays + Sat.
+The only job in this workflow is the Glue Python Shell job - orders_rule_disable.
+
+So, effectively the main workflow runs continuously on all weekdays from 9:15 AM to next day 9:00 AM.
+The workflow will not start automatically at 9:15 AM. When the first file arrives at or after 9:15 AM, the workflow will start and then it will be a continuous loop.

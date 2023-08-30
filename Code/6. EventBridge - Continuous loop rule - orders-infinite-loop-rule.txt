@@ -1,0 +1,23 @@
+{
+  "$or": [{
+    "detail-type": ["Glue Job State Change"],
+    "source": ["aws.glue"],
+    "detail": {
+      "jobName": ["orders_redshift_final_audit_load"],
+      "state": ["SUCCEEDED"]
+    }
+  }, {
+    "source": ["aws.s3"],
+    "detail-type": ["Object Created"],
+    "detail": {
+      "bucket": {
+        "name": ["fo-to-dw-orders-landing-area"]
+      },
+      "object": {
+        "key": [{
+          "prefix": "batch-completion/"
+        }]
+      }
+    }
+  }]
+}

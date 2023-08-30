@@ -1,0 +1,90 @@
+We create a kinesis delivery stream with source as the kinesis data stream created earlier. This delivery stream will write the data into an S3 bucket (landing area).
+
+We have enabled both Lambda Transformation and Format conversion here:
+
+1. In Lambda Transformation, instead of calculating / adding order_value like we did previously, here we are introducing a new field current_timestamp with epoch value.
+We will use this field to partition the data stored in in S3.
+
+"Inline parsing for JSON" was enabled and the Dynamic Partitioning key was set as:
+year	.run_id| strftime("%Y")
+month	.run_id| strftime("%m")
+day	.run_id| strftime("%d")
+hour	.run_id| strftime("%H")
+
+The S3 bucket prefix will be:
+orders/year=!{partitionKeyFromQuery:year}/month=!{partitionKeyFromQuery:month}/day=!{partitionKeyFromQuery:day}/hour=!{partitionKeyFromQuery:hour}/
+
+The S3 error bucket prefix will be:
+order-errors/
+
+The "/" at the end is important.
+Without that, the last folder-name will get mereged with the file name i.e. it wont look like a file under a folder.
+
+"New line delimiter" was enabled.
+
+With these changes, instead of writing 1 file per order, as was happening previously, we are able to write multiple orders in 1 file.
+
+We set the buffer size as 128 mebibyte (A mebibyte equals 220 or 1,048,576 bytes) and buffer interval as 300 seconds.
+Firehose will wait for 5 minutes before writing to S3. If 128 mebibyte is reached before 5 minutes, firehose will start writing before 5 minutes.
+
+Data in S3 will be partitioned based on year/month/day/hour.
+
+
+2. We also enabled Record Format Conversion to Parquet.
+Before enabling this, we created a Glue Table - landing-area-schema - with the data format classification as Parquet and representing the schema of the expected records.
+This table is used in the firehose and this helps firehose to understand the schema of the incmoing records and accordingly perform parquet conversion.
+In the landing-area-schema table, we defined "products" as an array column with below definition.
+
+{
+  "products": [
+    {
+      "product_code": "string",
+      "product_name": "string",
+      "product_price": "int",
+      "product_qty": "int"
+    }
+  ]
+}
+
+Getting this definition right was a challenge.
+"struct" was throwing an error.
+We could use "string" but then, this had to be converted to array in the Glue job reading from landing layer, in order to be able to explode and extract individual columns.
+So, wanted to use "array" when loading into landing layer itself.
+To get the definition for landing-area-schema table, i ran the firehose without any parquet conversion and Glue data catalog reference, then ran glue crawler and saw the structure of the table Glue created (to see how Glue reads the data by default). It was array with above definition. So copied this to landing-area-schema, enabled parquet conversion and glue catalog reference and processed data again. It worked !!!
+
+Created a Glue crawler after firehose delivered data successfully. Specify the S3 source as bucket/folder-name. 
+If you specify just bucket, the folder-name "orders" will show up as a partition column.
+Also, note that, when we enable format conversion to Parquet, the "compression" gets disabled automatically.
+This is because compression to Snappy is taken care of automatically by Firehose and the disabling of the option is to ensure we dont choose some other compression type.
+
+
+
+****************
+
+
+How lambda transformation in firehose works now is Kinesis data stream -> firehose -> lambda transformation -> firehose -> S3.
+We need to provide the name of the lambda function that will perform the transformation and the buffer size / buffer limit.
+We set the buffer size as 1 MB and buffer interval as 60 seconds, which means the firehose will wait for 60 seconds or till 1 MB of data is available, before invoking the lambda.
+So, basically the flow is like this:
+Kinesis data stream -> firehose -> 60 seconds -> lambda transformation -> firehose -> 300 seconds -> S3.
+
+The lambda function used for transformation is similar to the ones used for consumption. Print out the event. Then extract the data. 
+Decoding the data would be needed because data is sent in encoded form to kinesis data stream and the data flows in encoded form to firehose and you would need to decode the data to transform it in whatever way you need. Then encode it back and send it in a particular format back to the firehose, which will write it to the S3 bucket specified.
+
+
+*********************
+
+How do error records published by upstream get tracked ?
+We simulated 2 errors: incorrect key in the data and incorrect timestamp.
+
+In the case of incorrect key in the data:
+Records go into order-errors/processing-failed/ folder
+Transformer lambda gets triggered and fails because key is missing and our lambda is looking for specific keys to extract data and transform it.
+In the order_errors/processing-failed/ folder, error stating lambda failed and raw data in encoded format is present.
+
+In the case of invalid timestamp in the data:
+Records go into order-errors/format-conversion-failed/ folder
+Transformer lambda gets triggered and runs to success but still records do not go into orders/ folder but into order-errors/ folder.
+In the order_errors/format-conversion-failed/ folder, you will see the message "data does not match the schema" because Glue Data Catalog schema expects a timestamp value for order_purchase_timestamp column but we got a string. Raw data in encoded format is also present.
+
+

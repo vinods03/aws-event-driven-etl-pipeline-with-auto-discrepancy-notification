@@ -1,0 +1,19 @@
+import sys
+import boto3
+
+client = boto3.client('events')
+
+try:
+    
+    response = client.enable_rule(
+    Name = 'orders-infinite-loop-rule',
+    EventBusName = 'default'
+)
+
+    print('The enable response is ', response)
+
+except Exception as e:
+    
+    print('Enable rule failed')
+    
+    
