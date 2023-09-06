@@ -10,15 +10,6 @@ sns_client = boto3.client('sns')
 
 def lambda_handler(event, context):
     
-    # response = audit_table.get_item( 
-    #     Key={
-    #     'run_id': 1693283520,
-    #     'layer': 's3_staging_layer'
-    # })
-    
-    # print('The response is ', response)
-    # print('Number of records in ', response['Item']['layer'], ' is ', response['Item']['num_records'])
-    
     print('The event is ', event)
     for record in event['Records']:
         
@@ -30,9 +21,6 @@ def lambda_handler(event, context):
         new_layer = record['dynamodb']['NewImage']['layer']['S']
         new_num_records = record['dynamodb']['NewImage']['num_records']['N']
         
-        # new_run_id = '1693920600'
-        # new_layer = 's3_staging_layer'
-    
         print('new_run_id is ', new_run_id)
         print('new_layer is ', new_layer)
         print('new_num_records is ', new_num_records)
