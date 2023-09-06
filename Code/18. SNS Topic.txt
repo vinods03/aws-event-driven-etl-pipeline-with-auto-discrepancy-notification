@@ -1,0 +1,4 @@
+Create an SNS Topic with email subscription. The lambda function - AuditTableScannerFn - publishes messages into this topic.
+This is the email where the automatic notifications (for both SUCCESS - counts match across layers - and FAILURE - counts do not match across layers - scenarios are sent).
+We can coose to have 2 different topics / 2 different emails as well - one for SUCCESS scenarios and another for FAILURE scenarios.
+

@@ -1,0 +1,3 @@
+All the audit_load Glue Python Shell jobs write the layer/count details in a DynamoDB table - orders-audit-table.
+Enable DynamoDB Streams (Exports and Streams tab) on this table with Trigger as the lambda function - AuditTableScannerFn.
+This is the function that publishes messages into SNS topic for automatic notification.
